@@ -9,7 +9,7 @@ import streamlit as st
 # ---------------- CONFIG ----------------
 BACKEND_HOST = "49.200.100.22"   # If streamlit and fastapi run on same server
 BACKEND_PORT = 6006         # Your app.py uvicorn port
-TIMEOUT_SEC = 240
+TIMEOUT_SEC = 30
 
 AUDIO_DIR = "/home/oobadmin/Streamlit/Audio/Telugu"
 os.makedirs(AUDIO_DIR, exist_ok=True)

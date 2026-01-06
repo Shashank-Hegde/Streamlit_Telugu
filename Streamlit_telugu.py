@@ -6,17 +6,19 @@ from datetime import datetime
 import requests
 import streamlit as st
 
-st.write("SCRIPT:", __file__)
-st.write("USER HOME:", os.environ.get("HOME"))
-st.write("AUDIO_DIR:", AUDIO_DIR)
-
 # ---------------- CONFIG ----------------
-BACKEND_HOST = "127.0.0.1"   # If streamlit and fastapi run on same server
-BACKEND_PORT = 6006         # Your app.py uvicorn port
+BACKEND_HOST = "127.0.0.1"
+BACKEND_PORT = 6006
 TIMEOUT_SEC = 30
 
 AUDIO_DIR = "/home/oobadmin/Streamlit/Audio/Telugu"
 os.makedirs(AUDIO_DIR, exist_ok=True)
+
+# ---- DEBUG (after variables exist) ----
+st.write("SCRIPT:", __file__)
+st.write("USER HOME:", os.environ.get("HOME"))
+st.write("BACKEND:", BACKEND_HOST, BACKEND_PORT)
+st.write("AUDIO_DIR:", AUDIO_DIR)
 
 st.set_page_config(page_title="Telugu ASR + Translation", layout="wide")
 st.title("Telugu ASR + Translation")

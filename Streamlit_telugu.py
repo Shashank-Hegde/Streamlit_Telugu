@@ -11,7 +11,7 @@ BACKEND_HOST = "49.200.100.22"   # If streamlit and fastapi run on same server
 BACKEND_PORT = 6006         # Your app.py uvicorn port
 TIMEOUT_SEC = 240
 
-AUDIO_DIR = os.path.expanduser("~/Streamlit/Audio/Telugu")
+AUDIO_DIR = "/home/oobadmin/Streamlit/Audio/Telugu"
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 st.set_page_config(page_title="Telugu ASR + Translation", layout="wide")

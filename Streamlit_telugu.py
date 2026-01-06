@@ -7,7 +7,7 @@ import requests
 import streamlit as st
 
 # ---------------- CONFIG ----------------
-BACKEND_HOST = "49.200.100.22"   # If streamlit and fastapi run on same server
+BACKEND_HOST = "127.0.0.1"   # If streamlit and fastapi run on same server
 BACKEND_PORT = 6006         # Your app.py uvicorn port
 TIMEOUT_SEC = 30
 

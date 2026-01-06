@@ -6,6 +6,10 @@ from datetime import datetime
 import requests
 import streamlit as st
 
+st.write("SCRIPT:", __file__)
+st.write("USER HOME:", os.environ.get("HOME"))
+st.write("AUDIO_DIR:", AUDIO_DIR)
+
 # ---------------- CONFIG ----------------
 BACKEND_HOST = "127.0.0.1"   # If streamlit and fastapi run on same server
 BACKEND_PORT = 6006         # Your app.py uvicorn port

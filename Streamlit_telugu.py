@@ -1,24 +1,16 @@
-import os
 import io
 import time
-from datetime import datetime
 
 import requests
 import streamlit as st
 
 # ---------------- CONFIG ----------------
-BACKEND_HOST = "127.0.0.1"
+# IMPORTANT:
+# - If Streamlit is running on the SAME server as FastAPI, use 127.0.0.1
+# - If Streamlit is running on a DIFFERENT machine / Streamlit Cloud, use the PUBLIC IP
+BACKEND_HOST = "49.200.100.22"   # change to "127.0.0.1" only if streamlit runs on same server
 BACKEND_PORT = 6006
-TIMEOUT_SEC = 30
-
-AUDIO_DIR = "/home/oobadmin/Streamlit/Audio/Telugu"
-os.makedirs(AUDIO_DIR, exist_ok=True)
-
-# ---- DEBUG (after variables exist) ----
-st.write("SCRIPT:", __file__)
-st.write("USER HOME:", os.environ.get("HOME"))
-st.write("BACKEND:", BACKEND_HOST, BACKEND_PORT)
-st.write("AUDIO_DIR:", AUDIO_DIR)
+TIMEOUT_SEC = 240  # longer timeout for big models
 
 st.set_page_config(page_title="Telugu ASR + Translation", layout="wide")
 st.title("Telugu ASR + Translation")
@@ -45,7 +37,6 @@ if input_method == "Record with microphone":
     )
     if audio_file is not None:
         audio_bytes = audio_file.getvalue()
-
 else:
     uploaded_file = st.file_uploader(
         "Upload a .wav file with Telugu audio:",
@@ -63,8 +54,9 @@ st.success("Audio ready.")
 st.audio(audio_bytes, format="audio/wav")
 
 st.markdown("---")
-st.subheader("2) Save audio to server folder + run ASR")
+st.subheader("2) Send to backend (backend saves file + runs ASR)")
 
+# ---------------- State ----------------
 if "result" not in st.session_state:
     st.session_state["result"] = None
 if "saved_filename" not in st.session_state:
@@ -72,49 +64,43 @@ if "saved_filename" not in st.session_state:
 if "rtt_seconds" not in st.session_state:
     st.session_state["rtt_seconds"] = None
 
-col_btn, col_path = st.columns([1, 3])
+col_btn, col_info = st.columns([1, 3])
 
 with col_btn:
     if st.button("Run Telugu ASR", type="primary"):
-        # 1) Save WAV to shared folder
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        saved_filename = f"streamlit_telugu_{ts}.wav"
-        save_path = os.path.join(AUDIO_DIR, saved_filename)
-
-        with open(save_path, "wb") as f:
-            f.write(audio_bytes)
-
-        st.session_state["saved_filename"] = saved_filename
-
-        # 2) Call backend (JSON mode so backend reads file from AUDIO_DIR)
         url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText"
 
         try:
             start_t = time.perf_counter()
             resp = requests.post(
                 url,
-                json={"audioFileName": saved_filename},
+                files={
+                    # Backend expects multipart field name "file"
+                    "file": ("streamlit_telugu.wav", io.BytesIO(audio_bytes), "audio/wav")
+                },
                 timeout=TIMEOUT_SEC,
             )
             rtt = time.perf_counter() - start_t
             st.session_state["rtt_seconds"] = round(rtt, 3)
 
             if resp.status_code != 200:
-                st.session_state["result"] = {
-                    "error": f"HTTP {resp.status_code}: {resp.text}"
-                }
+                st.session_state["result"] = {"error": f"HTTP {resp.status_code}: {resp.text}"}
+                st.session_state["saved_filename"] = None
             else:
-                st.session_state["result"] = resp.json()
+                data = resp.json()
+                st.session_state["result"] = data
+                # Backend returns the saved filename in "uploaded_filename"
+                st.session_state["saved_filename"] = data.get("uploaded_filename")
 
         except Exception as e:
             st.session_state["result"] = {"error": str(e)}
             st.session_state["rtt_seconds"] = None
+            st.session_state["saved_filename"] = None
 
-with col_path:
+with col_info:
     if st.session_state.get("saved_filename"):
-        st.markdown(
-            f"**Saved on server:** `{os.path.join(AUDIO_DIR, st.session_state['saved_filename'])}`"
-        )
+        st.markdown(f"**Saved on backend server as:** `{st.session_state['saved_filename']}`")
+    st.markdown(f"**Backend URL:** `http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText`")
 
 # ---------------- Show output ----------------
 st.markdown("---")
@@ -139,5 +125,5 @@ st.code(result.get("telugu_transcript", "N/A"), language="text")
 st.markdown("**English translation:**")
 st.code(result.get("english_translation", "N/A"), language="text")
 
-st.markdown("**Backend audio_file field:**")
+st.markdown("**Backend audio_file field (basename):**")
 st.code(result.get("audio_file", "N/A"), language="text")

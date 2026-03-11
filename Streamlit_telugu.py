@@ -7,11 +7,11 @@ from datetime import datetime, timezone, timedelta
 
 # ---------------- CONFIG ----------------
 BACKEND_HOST = "49.200.100.22"
-BACKEND_PORT = 6006
+BACKEND_PORT = 6007
 TIMEOUT_SEC  = 240
 
-st.set_page_config(page_title="Telugu ASR + Translation", layout="wide")
-st.title("Telugu ASR + Translation")
+st.set_page_config(page_title="Marathi ASR + Translation", layout="wide")
+st.title("Marathi ASR + Translation")
 st.caption("Upload/record Telugu speech → Telugu transcript + English translation")
 st.markdown("---")
 

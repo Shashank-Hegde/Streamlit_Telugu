@@ -57,15 +57,14 @@ if "rtt_seconds"    not in st.session_state: st.session_state["rtt_seconds"]    
 col_btn, col_info = st.columns([1, 3])
 with col_btn:
     if st.button("Run Telugu ASR", type="primary"):
-        # /convertSpeechToText now handles multipart form-data (Streamlit)
-        # as well as the original JSON body (app5).
+        timestamp = int(time.time())
+        filename = "streamlit_marathi_{}.wav".format(timestamp)
         url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText"
         try:
             start_t = time.perf_counter()
             resp = requests.post(
                 url,
-                timestamp = int(time.time())
-                filename = "streamlit_marathi_{}.wav".format(timestamp)
+                files={"file": (filename, io.BytesIO(audio_bytes), "audio/wav")},
                 timeout=TIMEOUT_SEC,
             )
             rtt = time.perf_counter() - start_t

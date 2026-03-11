@@ -64,7 +64,8 @@ with col_btn:
             start_t = time.perf_counter()
             resp = requests.post(
                 url,
-                files={"file": ("streamlit_telugu.wav", io.BytesIO(audio_bytes), "audio/wav")},
+                filename = f"streamlit_marathi_{int(time.time())}.wav"
+                files={"file": (filename, io.BytesIO(audio_bytes), "audio/wav")},
                 timeout=TIMEOUT_SEC,
             )
             rtt = time.perf_counter() - start_t
@@ -107,7 +108,7 @@ if "error" in result:
     st.stop()
 
 # Multipart path returns flat keys: raw_hindi, english_translation, file
-st.markdown("**Telugu transcript:**")
+st.markdown("**Marathi transcript:**")
 st.code(result.get("raw_hindi", "N/A"), language="text")
 
 st.markdown("**English translation:**")

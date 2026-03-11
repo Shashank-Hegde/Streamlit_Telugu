@@ -55,12 +55,13 @@ if "result"         not in st.session_state: st.session_state["result"]         
 if "saved_filename" not in st.session_state: st.session_state["saved_filename"] = None
 if "rtt_seconds"    not in st.session_state: st.session_state["rtt_seconds"]    = None
 from datetime import datetime
-now = datetime.now()
+IST = timezone(timedelta(hours=5, minutes=30))
+now = datetime.now(IST)
 
 col_btn, col_info = st.columns([1, 3])
 with col_btn:
     if st.button("Run Telugu ASR", type="primary"):
-        timestamp_str = now.strftime("%Y%m%d_%H%M%S") + "_" + str(now.microsecond // 1000).zfill(3)
+        timestamp_str = now.strftime("%d%m_%Y_%H%M_%S") + "_" + str(now.microsecond // 1000).zfill(3)
         filename = "streamlit_marathi_{}.wav".format(timestamp_str)
         url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText"
         try:

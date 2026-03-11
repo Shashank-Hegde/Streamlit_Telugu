@@ -2,6 +2,7 @@ import io
 import time
 import requests
 import streamlit as st
+from datetime import datetime
 
 # ---------------- CONFIG ----------------
 BACKEND_HOST = "49.200.100.22"
@@ -53,12 +54,14 @@ st.subheader("2) Send to backend")
 if "result"         not in st.session_state: st.session_state["result"]         = None
 if "saved_filename" not in st.session_state: st.session_state["saved_filename"] = None
 if "rtt_seconds"    not in st.session_state: st.session_state["rtt_seconds"]    = None
+from datetime import datetime
+now = datetime.now()
 
 col_btn, col_info = st.columns([1, 3])
 with col_btn:
     if st.button("Run Telugu ASR", type="primary"):
-        timestamp = int(time.time())
-        filename = "streamlit_marathi_{}.wav".format(timestamp)
+        timestamp_str = now.strftime("%Y%m%d_%H%M%S") + "_" + str(now.microsecond // 1000).zfill(3)
+        filename = "streamlit_marathi_{}.wav".format(timestamp_str)
         url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText"
         try:
             start_t = time.perf_counter()

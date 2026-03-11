@@ -64,8 +64,8 @@ with col_btn:
             start_t = time.perf_counter()
             resp = requests.post(
                 url,
-                filename = f"streamlit_marathi_{int(time.time())}.wav"
-                files={"file": (filename, io.BytesIO(audio_bytes), "audio/wav")},
+                timestamp = int(time.time())
+                filename = "streamlit_marathi_{}.wav".format(timestamp)
                 timeout=TIMEOUT_SEC,
             )
             rtt = time.perf_counter() - start_t

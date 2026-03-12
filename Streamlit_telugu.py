@@ -4,7 +4,9 @@ import io
 import time
 
 import requests
+from datetime import datetime, timezone, timedelta
 import streamlit as st
+
 
 # ---------------- CONFIG ----------------
 # IMPORTANT:
@@ -71,6 +73,10 @@ col_btn, col_info = st.columns([1, 3])
 with col_btn:
     if st.button("Run Telugu ASR", type="primary"):
         url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText"
+        IST = timezone(timedelta(hours=5, minutes=30))
+        now = datetime.now(IST)
+        timestamp_str = now.strftime("%d_%m_%H%M_%S") + "_" + str(now.microsecond // 1000).zfill(3)
+        filename = "streamlit_telugu_{}.wav".format(timestamp_str)
 
         try:
             start_t = time.perf_counter()
@@ -78,7 +84,7 @@ with col_btn:
                 url,
                 files={
                     # Backend expects multipart field name "file"
-                    "file": ("streamlit_telugu.wav", io.BytesIO(audio_bytes), "audio/wav")
+                    "file": (filename, io.BytesIO(audio_bytes), "audio/wav")
                 },
                 timeout=TIMEOUT_SEC,
             )

@@ -122,10 +122,10 @@ if "error" in result:
     st.stop()
 
 st.markdown("**Telugu transcript:**")
-st.code(result.get("telugu_transcript", "N/A"), language="text")
+st.code(result.get("raw_hindi", "N/A"), language="text")
 
 st.markdown("**English translation:**")
 st.code(result.get("english_translation", "N/A"), language="text")
 
 st.markdown("**Backend audio_file field (basename):**")
-st.code(result.get("audio_file", "N/A"), language="text")
+st.code(result.get("file", "N/A"), language="text")

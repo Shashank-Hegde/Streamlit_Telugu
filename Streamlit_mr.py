@@ -12,11 +12,11 @@ TIMEOUT_SEC  = 240
 
 st.set_page_config(page_title="Marathi ASR + Translation", layout="wide")
 st.title("Marathi ASR + Translation")
-st.caption("Upload/record Telugu speech → Telugu transcript + English translation")
+st.caption("Upload/record Marathi speech → Marathi transcript + English translation")
 st.markdown("---")
 
 # ---------------- Audio input ----------------
-st.subheader("1) Provide Telugu audio")
+st.subheader("1) Provide Marathi audio")
 input_method = st.radio(
     "Choose input method:",
     ["Record with microphone", "Upload WAV file"],
@@ -27,14 +27,14 @@ input_method = st.radio(
 audio_bytes = None
 if input_method == "Record with microphone":
     audio_file = st.audio_input(
-        "Click to record your Telugu audio, then click again to stop:",
+        "Click to record your Marathi audio, then click again to stop:",
         key="audio_rec",
     )
     if audio_file is not None:
         audio_bytes = audio_file.getvalue()
 else:
     uploaded_file = st.file_uploader(
-        "Upload a .wav file with Telugu audio:",
+        "Upload a .wav file with Marathi audio:",
         type=["wav"],
         key="audio_upload",
     )
@@ -61,7 +61,7 @@ now = datetime.now(IST)
 
 col_btn, col_info = st.columns([1, 3])
 with col_btn:
-    if st.button("Run Telugu ASR", type="primary"):
+    if st.button("Run Marathi ASR", type="primary"):
         timestamp_str = now.strftime("%d%m_%Y_%H%M_%S") + "_" + str(now.microsecond // 1000).zfill(3)
         filename = "streamlit_marathi_{}.wav".format(timestamp_str)
         url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText"
@@ -100,7 +100,7 @@ st.subheader("3) Output")
 
 result = st.session_state.get("result")
 if not result:
-    st.info("Click **Run Telugu ASR** to get transcript + translation.")
+    st.info("Click **Run Marathi ASR** to get transcript + translation.")
     st.stop()
 
 rtt_val = st.session_state.get("rtt_seconds")

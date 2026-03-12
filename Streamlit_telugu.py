@@ -135,5 +135,3 @@ st.code(result.get("english_translation", "N/A"), language="text")
 
 st.markdown("**Backend audio_file field (basename):**")
 st.code(result.get("audio_file", "N/A"), language="text")
-
-st.session_state["saved_filename"] = data.get("uploaded_filename")

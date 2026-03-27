@@ -1,14 +1,14 @@
 import io
 import time
-import requests
-from datetime import datetime
-import streamlit as st
 from datetime import datetime, timezone, timedelta
+
+import requests
+import streamlit as st
 
 # ---------------- CONFIG ----------------
 BACKEND_HOST = "49.200.100.22"
 BACKEND_PORT = 6007
-TIMEOUT_SEC  = 240
+TIMEOUT_SEC = 240
 
 st.set_page_config(page_title="Marathi ASR + Translation", layout="wide")
 st.title("Marathi ASR + Translation")
@@ -25,6 +25,7 @@ input_method = st.radio(
 )
 
 audio_bytes = None
+
 if input_method == "Record with microphone":
     audio_file = st.audio_input(
         "Click to record your Marathi audio, then click again to stop:",
@@ -49,22 +50,28 @@ st.success("Audio ready.")
 st.audio(audio_bytes, format="audio/wav")
 st.markdown("---")
 
+# ---------------- State ----------------
+if "result" not in st.session_state:
+    st.session_state["result"] = None
+if "saved_filename" not in st.session_state:
+    st.session_state["saved_filename"] = None
+if "rtt_seconds" not in st.session_state:
+    st.session_state["rtt_seconds"] = None
+
+# ---------------- Backend call ----------------
 st.subheader("2) Send to backend")
 
-# ---------------- State ----------------
-if "result"         not in st.session_state: st.session_state["result"]         = None
-if "saved_filename" not in st.session_state: st.session_state["saved_filename"] = None
-if "rtt_seconds"    not in st.session_state: st.session_state["rtt_seconds"]    = None
-from datetime import datetime
 IST = timezone(timedelta(hours=5, minutes=30))
-now = datetime.now(IST)
 
 col_btn, col_info = st.columns([1, 3])
+
 with col_btn:
     if st.button("Run Marathi ASR", type="primary"):
+        now = datetime.now(IST)
         timestamp_str = now.strftime("%d%m_%Y_%H%M_%S") + "_" + str(now.microsecond // 1000).zfill(3)
-        filename = "streamlit_marathi_{}.wav".format(timestamp_str)
+        filename = f"streamlit_marathi_{timestamp_str}.wav"
         url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/convertSpeechToText"
+
         try:
             start_t = time.perf_counter()
             resp = requests.post(
@@ -76,17 +83,24 @@ with col_btn:
             st.session_state["rtt_seconds"] = round(rtt, 3)
 
             if resp.status_code != 200:
-                st.session_state["result"]         = {"error": f"HTTP {resp.status_code}: {resp.text}"}
+                st.session_state["result"] = {"error": f"HTTP {resp.status_code}: {resp.text}"}
                 st.session_state["saved_filename"] = None
             else:
                 data = resp.json()
-                st.session_state["result"]         = data
-                # Multipart path returns flat response with key "file"
-                st.session_state["saved_filename"] = data.get("file")
+                st.session_state["result"] = data
+
+                # Prefer nested results[0].file, fallback to top-level file
+                saved_filename = None
+                if isinstance(data.get("results"), list) and len(data["results"]) > 0:
+                    saved_filename = data["results"][0].get("file")
+                if not saved_filename:
+                    saved_filename = data.get("file")
+
+                st.session_state["saved_filename"] = saved_filename
 
         except Exception as e:
-            st.session_state["result"]         = {"error": str(e)}
-            st.session_state["rtt_seconds"]    = None
+            st.session_state["result"] = {"error": str(e)}
+            st.session_state["rtt_seconds"] = None
             st.session_state["saved_filename"] = None
 
 with col_info:
@@ -111,12 +125,34 @@ if "error" in result:
     st.error(result["error"])
     st.stop()
 
-# Multipart path returns flat keys: raw_hindi, english_translation, file
+# ---------------- Parse backend response ----------------
+entry = {}
+if isinstance(result.get("results"), list) and len(result["results"]) > 0:
+    entry = result["results"][0]
+
+raw_marathi = entry.get("raw_transcription") or result.get("raw_transcription") or result.get("raw_hindi") or "N/A"
+corrected_marathi = entry.get("corrected_hindi") or result.get("corrected_hindi") or "N/A"
+english_translation = entry.get("english_translation") or result.get("english_translation") or result.get("transcription") or "N/A"
+backend_file = entry.get("file") or result.get("file") or "N/A"
+audio_duration = entry.get("audio_duration_seconds")
+
+# ---------------- Display ----------------
 st.markdown("**Marathi transcript:**")
-st.code(result.get("raw_hindi", "N/A"), language="text")
+st.code(raw_marathi, language="text")
+
+st.markdown("**Corrected Marathi:**")
+st.code(corrected_marathi, language="text")
 
 st.markdown("**English translation:**")
-st.code(result.get("english_translation", "N/A"), language="text")
+st.code(english_translation, language="text")
+
+if audio_duration is not None:
+    st.markdown("**Audio duration (seconds):**")
+    st.code(str(audio_duration), language="text")
 
 st.markdown("**Backend audio_file field (basename):**")
-st.code(result.get("file", "N/A"), language="text")
+st.code(backend_file, language="text")
+
+# ---------------- Optional: full JSON ----------------
+with st.expander("Show full backend JSON"):
+    st.json(result)

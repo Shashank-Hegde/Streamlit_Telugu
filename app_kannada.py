@@ -130,10 +130,18 @@ entry = {}
 if isinstance(result.get("results"), list) and len(result["results"]) > 0:
     entry = result["results"][0]
 
-raw_kannada = entry.get("raw_transcription") or result.get("raw_transcription") or "N/A"
-corrected_kannada = entry.get("corrected_kannada") or result.get("corrected_kannada") or "N/A"
-english_translation = entry.get("english_translation") or result.get("english_translation") or result.get("transcription") or "N/A"
-backend_file = entry.get("file") or result.get("file") or "N/A"
+raw_kannada = entry.get("raw_transcription") or "N/A"
+
+# IMPORTANT FIX
+corrected_kannada = (
+    entry.get("corrected_kannada")
+    or entry.get("corrected_hindi")   # 👈 fallback (your backend uses this)
+    or raw_kannada
+)
+
+english_translation = entry.get("english_translation") or result.get("transcription") or "N/A"
+
+backend_file = entry.get("file") or "N/A"
 audio_duration = entry.get("audio_duration_seconds")
 
 # ---------------- Display ----------------

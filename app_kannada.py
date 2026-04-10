@@ -103,26 +103,34 @@ with st.expander("DEBUG: Full backend response"):
 
 # ---------------- SAFE PARSING ----------------
 
+# ---------------- SAFE PARSING ----------------
+
 entry = None
 
+# Case 1: results[] exists
 if "results" in result and isinstance(result["results"], list) and len(result["results"]) > 0:
     entry = result["results"][0]
+
+# Case 2: flat response (your current case)
 else:
-    st.error("❌ No valid 'results' found in response")
-    st.stop()
+    entry = result  # 👈 THIS IS THE FIX
 
 # Extract fields safely
-raw_kannada = entry.get("raw_transcription", "N/A")
+raw_kannada = (
+    entry.get("raw_transcription")
+    or entry.get("raw_hindi")   # 👈 your backend uses this
+    or "N/A"
+)
 
 corrected_kannada = (
     entry.get("corrected_kannada")
-    or entry.get("corrected_hindi")   # backend reality
+    or entry.get("corrected_hindi")  # 👈 actual field
     or raw_kannada
 )
 
 english_translation = (
     entry.get("english_translation")
-    or result.get("transcription")
+    or entry.get("translation")
     or "N/A"
 )
 

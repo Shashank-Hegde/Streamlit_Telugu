@@ -1,6 +1,7 @@
 import io
 import os
 import time
+import threading
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -9,9 +10,9 @@ import streamlit as st
 # ─────────────────────────── CONFIG ────────────────────────────
 BACKEND_HOST  = "49.200.100.22"
 PORT_A        = 6007          # "Old" model
-PORT_B        = 6011          # "New" model
+PORT_B        = 6008          # "New" model
 LABEL_A       = "Port 6007"
-LABEL_B       = "Port 6011"
+LABEL_B       = "Port 6008"
 TIMEOUT_SEC   = 240
 SAVE_DIR      = os.path.expanduser("~/Streamlit/Audio/Kannada")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -21,12 +22,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # ─────────────────────────── HELPERS ───────────────────────────
 
 def make_filename() -> str:
-    """streamlit_<second><ms>_<hour>_<dd>_<mm>_<yyyy>.wav"""
+    """streamlit_<second><ms>_<min>_<hour>_<dd>_<mm>_<yyyy>.wav"""
     now = datetime.now(IST)
     ms  = now.microsecond // 1000
     return (
         f"streamlit_"
         f"{now.second:02d}{ms:03d}_"
+        f"{now.minute:02d}_"
         f"{now.hour:02d}_"
         f"{now.day:02d}_"
         f"{now.month:02d}_"
@@ -178,6 +180,8 @@ run_col, info_col = st.columns([1, 3])
 with run_col:
     run = st.button("▶  Run both models", type="primary", use_container_width=True)
 
+GRACE_SEC = 3   # if one port finishes, wait at most this long for the other
+
 if run:
     filename = make_filename()
 
@@ -189,12 +193,33 @@ if run:
         st.warning(f"Could not save audio to disk: {exc}")
         st.session_state["saved_file"] = None
 
-    # Call both ports — sequential (avoids hammering GPU with parallel hits)
-    with st.spinner(f"Calling {LABEL_A} (port {PORT_A})…"):
-        ra, rtt_a, err_a = call_backend(PORT_A, filename, audio_bytes)
+    # ── Fire both ports in parallel ──────────────────────────────
+    bucket: dict = {}   # filled by threads: {PORT_A: (...), PORT_B: (...)}
 
-    with st.spinner(f"Calling {LABEL_B} (port {PORT_B})…"):
-        rb, rtt_b, err_b = call_backend(PORT_B, filename, audio_bytes)
+    def _call(port):
+        bucket[port] = call_backend(port, filename, audio_bytes)
+
+    t_a = threading.Thread(target=_call, args=(PORT_A,), daemon=True)
+    t_b = threading.Thread(target=_call, args=(PORT_B,), daemon=True)
+    t_a.start()
+    t_b.start()
+
+    with st.spinner(f"Calling {LABEL_A} & {LABEL_B} in parallel…"):
+        # Wait for both up to TIMEOUT_SEC; then apply 3 s grace period
+        t_a.join(timeout=TIMEOUT_SEC)
+        t_b.join(timeout=TIMEOUT_SEC)
+
+        # If one finished early and the other is still running, wait GRACE_SEC more
+        if PORT_A in bucket and PORT_B not in bucket:
+            st.toast(f"⏳ {LABEL_A} done — waiting up to {GRACE_SEC}s for {LABEL_B}…")
+            t_b.join(timeout=GRACE_SEC)
+        elif PORT_B in bucket and PORT_A not in bucket:
+            st.toast(f"⏳ {LABEL_B} done — waiting up to {GRACE_SEC}s for {LABEL_A}…")
+            t_a.join(timeout=GRACE_SEC)
+
+    # Collect whatever arrived; mark missing ports as timed-out
+    ra, rtt_a, err_a = bucket.get(PORT_A, (None, None, f"Port {PORT_A} did not respond in time"))
+    rb, rtt_b, err_b = bucket.get(PORT_B, (None, None, f"Port {PORT_B} did not respond in time"))
 
     st.session_state.update(
         result_a=ra, rtt_a=rtt_a, err_a=err_a,

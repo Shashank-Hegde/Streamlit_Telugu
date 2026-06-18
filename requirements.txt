@@ -3,3 +3,5 @@ requests==2.32.5
 pydub
 ffmpeg
 audioop-lts
+google-api-python-client
+google-auth

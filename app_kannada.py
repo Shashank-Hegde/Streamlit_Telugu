@@ -267,7 +267,13 @@ if raw_bytes is None:
 
 # ── Ensure bytes are valid WAV (microphone returns WebM/OGG) ──
 def _to_wav(data: bytes) -> bytes:
-    """Convert any audio format to 16kHz mono WAV using pydub."""
+    """
+    Convert any audio to 16kHz mono WAV.
+    Strategy:
+      1. Already valid WAV → return as-is
+      2. Try soundfile (handles WAV/FLAC/OGG natively, no ffmpeg)
+      3. Try av (PyAV — pure Python, no ffmpeg binary needed)
+    """
     import wave as _wave
     # Fast path: already a valid WAV
     try:
@@ -275,16 +281,59 @@ def _to_wav(data: bytes) -> bytes:
             return data
     except Exception:
         pass
-    # Needs conversion via pydub (requires ffmpeg on Streamlit Cloud)
+
+    # Try soundfile (handles ogg/flac/wav without ffmpeg)
     try:
-        from pydub import AudioSegment
-        seg = AudioSegment.from_file(io.BytesIO(data))
-        seg = seg.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        import soundfile as sf
+        import numpy as np
+        audio_np, sr = sf.read(io.BytesIO(data), dtype="int16", always_2d=False)
+        # Resample to 16kHz if needed using numpy (simple linear interp)
+        if sr != 16000:
+            duration = len(audio_np) / sr
+            target_len = int(duration * 16000)
+            audio_np = np.interp(
+                np.linspace(0, len(audio_np) - 1, target_len),
+                np.arange(len(audio_np)),
+                audio_np.astype(np.float64)
+            ).astype(np.int16)
+        # Convert to mono if stereo
+        if audio_np.ndim == 2:
+            audio_np = audio_np.mean(axis=1).astype(np.int16)
+        # Write as WAV
         buf = io.BytesIO()
-        seg.export(buf, format="wav")
-        return buf.getvalue()
-    except Exception as e:
-        st.error(f"Audio conversion failed: {e}")
+        sf.write(buf, audio_np, 16000, format="WAV", subtype="PCM_16")
+        buf.seek(0)
+        return buf.read()
+    except Exception as e1:
+        pass
+
+    # Try PyAV (pure Python decoder, no system ffmpeg binary)
+    try:
+        import av
+        import numpy as np
+        container = av.open(io.BytesIO(data))
+        stream = container.streams.audio[0]
+        frames = []
+        for frame in container.decode(stream):
+            arr = frame.to_ndarray()
+            if arr.ndim == 2:
+                arr = arr.mean(axis=0)
+            frames.append(arr.astype(np.float32))
+        container.close()
+        audio_np = np.concatenate(frames)
+        # Normalise float → int16
+        audio_np = (audio_np / max(np.abs(audio_np).max(), 1e-6) * 32767).astype(np.int16)
+        buf = io.BytesIO()
+        import wave as _w
+        with _w.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(audio_np.tobytes())
+        buf.seek(0)
+        return buf.read()
+    except Exception as e2:
+        st.error(f"Audio conversion failed (soundfile: {e1} | PyAV: {e2})")
         st.stop()
 
 audio_bytes = _to_wav(raw_bytes)

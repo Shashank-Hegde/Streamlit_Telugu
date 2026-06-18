@@ -128,29 +128,16 @@ def _write_port_columns(sheets, row_idx, port, raw_k, corrected, english, rtt):
 
 
 def log_to_sheet(audio_bytes, filename, port, raw_k, corrected, english, rtt):
-    """Upload to Drive + write Sheet row. Called in background thread."""
+    """Upload to Drive + write Sheet row. Returns (ok, message) — never raises."""
     try:
-        import logging
-        _log = logging.getLogger("streamlit_logger")
-        _log.info(f"[log_to_sheet] port={port} filename={filename} starting")
-
         drive_url = upload_to_drive(audio_bytes, filename)
-        _log.info(f"[log_to_sheet] port={port} drive_url={drive_url}")
-
         _, sheets = _google_clients()
         row_idx   = _find_or_create_row(sheets, filename, drive_url)
-        _log.info(f"[log_to_sheet] port={port} row_idx={row_idx}")
-
         _write_port_columns(sheets, row_idx, port, raw_k, corrected, english, rtt)
-        _log.info(f"[log_to_sheet] port={port} sheet write complete")
-
-        st.session_state.setdefault("log_ok", []).append(
-            f"✅ [{port}] uploaded → {drive_url}"
-        )
+        return True, f"port {port} → row {row_idx} | {drive_url}"
     except Exception as exc:
         import traceback
-        err = f"[{port}] {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
-        st.session_state.setdefault("log_errors", []).append(err)
+        return False, f"port {port} | {type(exc).__name__}: {exc} | {traceback.format_exc()}"
 
 
 # ─────────────────────── HELPERS ────────────────────────────────
@@ -388,23 +375,24 @@ if st.button("▶  Run both models", type="primary"):
         result_b=rb, rtt_b=rtt_b, err_b=err_b,
     )
 
-    # ── GDrive + Sheets logging from Streamlit Cloud ──────────────
-    # Fired in background threads so UI is not blocked
-    for port, res, rtt in [(PORT_A, ra, rtt_a), (PORT_B, rb, rtt_b)]:
-        if res and not (port == PORT_A and err_a) and not (port == PORT_B and err_b):
-            threading.Thread(
-                target=log_to_sheet,
-                kwargs=dict(
-                    audio_bytes = audio_bytes,
-                    filename    = filename,
-                    port        = port,
-                    raw_k       = res["raw_kannada"],
-                    corrected   = res["corrected_kannada"],
-                    english     = res["english_translation"],
-                    rtt         = rtt or 0.0,
-                ),
-                daemon=True,
-            ).start()
+    # ── GDrive + Sheets logging — synchronous so errors surface ────
+    log_results = []
+    for port, res, rtt, err in [
+        (PORT_A, ra, rtt_a, err_a),
+        (PORT_B, rb, rtt_b, err_b),
+    ]:
+        if res and not err:
+            ok, msg = log_to_sheet(
+                audio_bytes = audio_bytes,
+                filename    = filename,
+                port        = port,
+                raw_k       = res["raw_kannada"],
+                corrected   = res["corrected_kannada"],
+                english     = res["english_translation"],
+                rtt         = rtt or 0.0,
+            )
+            log_results.append((ok, msg))
+    st.session_state["log_results"] = log_results
 
 # ── 3. Results ───────────────────────────────────────────────────
 st.markdown("---")
@@ -424,13 +412,12 @@ if ra is None and rb is None and err_a is None and err_b is None:
 if st.session_state.get("filename"):
     st.caption(f"📁 File: `{st.session_state['filename']}`")
 
-# Log status (non-blocking)
-if st.session_state.get("log_ok"):
-    for m in st.session_state["log_ok"]:
-        st.success(m)
-if st.session_state.get("log_errors"):
-    for e in st.session_state["log_errors"]:
-        st.error(f"Sheet/Drive error: {e}")
+# Log status
+for ok, msg in st.session_state.get("log_results") or []:
+    if ok:
+        st.success(f"✅ Sheet/Drive: {msg}")
+    else:
+        st.error(f"❌ Sheet/Drive failed: {msg}")
 
 # RTT metrics
 m1, m2, m3 = st.columns(3)

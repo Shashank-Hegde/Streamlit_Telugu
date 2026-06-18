@@ -130,14 +130,27 @@ def _write_port_columns(sheets, row_idx, port, raw_k, corrected, english, rtt):
 def log_to_sheet(audio_bytes, filename, port, raw_k, corrected, english, rtt):
     """Upload to Drive + write Sheet row. Called in background thread."""
     try:
+        import logging
+        _log = logging.getLogger("streamlit_logger")
+        _log.info(f"[log_to_sheet] port={port} filename={filename} starting")
+
         drive_url = upload_to_drive(audio_bytes, filename)
+        _log.info(f"[log_to_sheet] port={port} drive_url={drive_url}")
+
         _, sheets = _google_clients()
         row_idx   = _find_or_create_row(sheets, filename, drive_url)
+        _log.info(f"[log_to_sheet] port={port} row_idx={row_idx}")
+
         _write_port_columns(sheets, row_idx, port, raw_k, corrected, english, rtt)
-    except Exception as exc:
-        st.session_state.setdefault("log_errors", []).append(
-            f"[{port}] {exc}"
+        _log.info(f"[log_to_sheet] port={port} sheet write complete")
+
+        st.session_state.setdefault("log_ok", []).append(
+            f"✅ [{port}] uploaded → {drive_url}"
         )
+    except Exception as exc:
+        import traceback
+        err = f"[{port}] {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+        st.session_state.setdefault("log_errors", []).append(err)
 
 
 # ─────────────────────── HELPERS ────────────────────────────────
@@ -217,6 +230,16 @@ st.title("🎙️ Kannada ASR — Side-by-Side Comparison")
 st.caption(f"**{LABEL_A}** vs **{LABEL_B}**  |  Host: `{BACKEND_HOST}`")
 st.markdown("---")
 
+# ── Secrets health check ──────────────────────────────────────────
+with st.expander("🔑 GCP Secrets check (expand to verify)", expanded=False):
+    try:
+        sa = st.secrets["gcp_service_account"]
+        st.success(f"✅ Secret loaded — client_email: {sa['client_email']}")
+        st.write(f"project_id: {sa['project_id']}")
+        st.write(f"private_key starts with: {sa['private_key'][:40]}...")
+    except Exception as e:
+        st.error(f"❌ Secret load failed: {e}")
+
 # ── 1. Audio input ───────────────────────────────────────────────
 st.subheader("1 · Provide Kannada audio")
 
@@ -227,18 +250,44 @@ input_method = st.radio(
 )
 
 audio_bytes = None
+raw_bytes   = None   # original bytes before any conversion
+
 if "Record" in input_method:
     af = st.audio_input("Record Kannada audio")
     if af:
-        audio_bytes = af.getvalue()
+        raw_bytes = af.getvalue()
 else:
     uf = st.file_uploader("Upload WAV", type=["wav"])
     if uf:
-        audio_bytes = uf.read()
+        raw_bytes = uf.read()
 
-if audio_bytes is None:
+if raw_bytes is None:
     st.info("👆 Provide audio above to continue.")
     st.stop()
+
+# ── Ensure bytes are valid WAV (microphone returns WebM/OGG) ──
+def _to_wav(data: bytes) -> bytes:
+    """Convert any audio format to 16kHz mono WAV using pydub."""
+    import wave as _wave
+    # Fast path: already a valid WAV
+    try:
+        with _wave.open(io.BytesIO(data)):
+            return data
+    except Exception:
+        pass
+    # Needs conversion via pydub (requires ffmpeg on Streamlit Cloud)
+    try:
+        from pydub import AudioSegment
+        seg = AudioSegment.from_file(io.BytesIO(data))
+        seg = seg.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        buf = io.BytesIO()
+        seg.export(buf, format="wav")
+        return buf.getvalue()
+    except Exception as e:
+        st.error(f"Audio conversion failed: {e}")
+        st.stop()
+
+audio_bytes = _to_wav(raw_bytes)
 
 st.success("✅ Audio ready")
 st.audio(audio_bytes, format="audio/wav")
@@ -326,10 +375,13 @@ if ra is None and rb is None and err_a is None and err_b is None:
 if st.session_state.get("filename"):
     st.caption(f"📁 File: `{st.session_state['filename']}`")
 
-# Log errors (non-blocking)
+# Log status (non-blocking)
+if st.session_state.get("log_ok"):
+    for m in st.session_state["log_ok"]:
+        st.success(m)
 if st.session_state.get("log_errors"):
     for e in st.session_state["log_errors"]:
-        st.warning(f"Sheet/Drive log error: {e}")
+        st.error(f"Sheet/Drive error: {e}")
 
 # RTT metrics
 m1, m2, m3 = st.columns(3)

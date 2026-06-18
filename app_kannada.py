@@ -8,7 +8,6 @@ import requests
 import streamlit as st
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 
 # ─────────────────────── CONFIG ─────────────────────────────────
 BACKEND_HOST  = "49.200.100.22"
@@ -38,41 +37,17 @@ def _google_clients():
     key_dict = dict(st.secrets["gcp_service_account"])
     creds = service_account.Credentials.from_service_account_info(
         key_dict,
-        scopes=[
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/spreadsheets",
-        ],
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
     )
-    drive  = build("drive",  "v3", credentials=creds, cache_discovery=False)
     sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    return drive, sheets
+    return None, sheets
 
 
 # ─────────────────────── DRIVE UPLOAD ───────────────────────────
 def upload_to_drive(audio_bytes: bytes, filename: str) -> str:
-    """Upload WAV bytes to Drive from Streamlit Cloud. Returns view URL."""
-    drive, _ = _google_clients()
-
-    media = MediaIoBaseUpload(
-        io.BytesIO(audio_bytes), mimetype="audio/wav", resumable=False
-    )
-    uploaded = (
-        drive.files()
-        .create(
-            body={"name": filename, "parents": [DRIVE_FOLDER]},
-            media_body=media,
-            fields="id",
-        )
-        .execute()
-    )
-    file_id = uploaded["id"]
-
-    drive.permissions().create(
-        fileId=file_id,
-        body={"role": "reader", "type": "anyone"},
-    ).execute()
-
-    return f"https://drive.google.com/file/d/{file_id}/view"
+    """Drive upload skipped — service accounts cannot write to personal My Drive.
+    Returns empty string; sheet row uses plain filename instead of hyperlink."""
+    return ""
 
 
 # ─────────────────────── SHEETS HELPERS ─────────────────────────
@@ -102,13 +77,17 @@ def _find_or_create_row(sheets, filename: str, drive_url: str) -> int:
 
     row_idx   = DATA_START_ROW + len(names)
     timestamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
-    hyperlink = f'=HYPERLINK("{drive_url}","{filename}")'
+    # Use hyperlink if Drive URL available, otherwise plain filename
+    cell_a = (
+        f'=HYPERLINK("{drive_url}","{filename}")' if drive_url
+        else filename
+    )
 
     sheets.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
         range=f"{SHEET_TAB}!A{row_idx}:J{row_idx}",
         valueInputOption="USER_ENTERED",
-        body={"values": [[hyperlink,"","","","","","","","",timestamp]]},
+        body={"values": [[cell_a,"","","","","","","","",timestamp]]},
     ).execute()
     return row_idx
 
@@ -182,7 +161,7 @@ def call_backend(port, filename, audio_bytes):
         )
         rtt = round(__import__("time").perf_counter() - t0, 3)
         if resp.status_code != 200:
-            return None, rtt, f"HTTP {resp.status_code}: {resp.text[:300]}"
+            return None, rtt, f"HTTP {resp.status_code}: {resp.text[:600]}"
         return parse_response(resp.json()), rtt, None
     except requests.exceptions.Timeout:
         return None, None, f"Timed out after {TIMEOUT_SEC}s"
@@ -324,6 +303,22 @@ def _to_wav(data: bytes) -> bytes:
         st.stop()
 
 audio_bytes = _to_wav(raw_bytes)
+
+# ── Audio diagnostics ────────────────────────────────────────────
+import wave as _wv
+try:
+    with _wv.open(io.BytesIO(audio_bytes)) as _wf:
+        _sr  = _wf.getframerate()
+        _ch  = _wf.getnchannels()
+        _sw  = _wf.getsampwidth()
+        _nf  = _wf.getnframes()
+        _dur = round(_nf / _sr, 2)
+    st.caption(
+        f"WAV ok: {_sr}Hz {_ch}ch {_sw*8}bit {_dur}s "
+        f"| wav_size={len(audio_bytes)}B raw_size={len(raw_bytes)}B"
+    )
+except Exception as _we:
+    st.warning(f"WAV header check failed: {_we} | raw[:4]={raw_bytes[:4]}")
 
 st.success("✅ Audio ready")
 st.audio(audio_bytes, format="audio/wav")

@@ -126,8 +126,8 @@ def make_filename() -> str:
     return (
         f"streamlit_"
         f"{now.second:02d}{ms:03d}_"
-        f"{now.minute:02d}_"
         f"{now.hour:02d}_"
+        f"{now.minute:02d}_"
         f"{now.day:02d}_"
         f"{now.month:02d}_"
         f"{now.year}.wav"

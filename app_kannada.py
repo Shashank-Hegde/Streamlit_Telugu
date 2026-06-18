@@ -18,10 +18,11 @@ LABEL_B       = "Port 6008"
 TIMEOUT_SEC   = 240
 GRACE_SEC     = 3
 
-DRIVE_FOLDER  = "1D2C_Cq034E2N68F3HtDS3N5yuF7gzFKP"
-SHEET_ID      = "1HmP5c0xR3CuvkDakip4J5pdzB6hssy-XRuoOu6iBxNI"
-SHEET_TAB     = "Sheet1"
+SHEET_ID       = "1HmP5c0xR3CuvkDakip4J5pdzB6hssy-XRuoOu6iBxNI"
+SHEET_TAB      = "Sheet1"
 DATA_START_ROW = 3
+CLOUDINARY_CLOUD  = "dfufhdc8j"
+CLOUDINARY_PRESET = "kannada_asr"
 
 SAVE_DIR = os.path.expanduser("~/Streamlit/Audio/Kannada")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -43,11 +44,25 @@ def _google_clients():
     return None, sheets
 
 
-# ─────────────────────── DRIVE UPLOAD ───────────────────────────
-def upload_to_drive(audio_bytes: bytes, filename: str) -> str:
-    """Drive upload skipped — service accounts cannot write to personal My Drive.
-    Returns empty string; sheet row uses plain filename instead of hyperlink."""
-    return ""
+# ─────────────────────── CLOUDINARY UPLOAD ────────────────
+def upload_to_cloudinary(audio_bytes: bytes, filename: str) -> str:
+    """Upload WAV to Cloudinary signed upload. Returns public URL."""
+    import hashlib, time as _t, json, requests as _req
+    api_key    = st.secrets['cloudinary']['api_key']
+    api_secret = st.secrets['cloudinary']['api_secret']
+    ts         = str(int(_t.time()))
+    public_id  = filename.replace('.wav', '')
+    sig_str    = 'public_id=' + public_id + '&timestamp=' + ts + api_secret
+    signature  = hashlib.sha256(sig_str.encode()).hexdigest()
+    url        = 'https://api.cloudinary.com/v1_1/' + CLOUDINARY_CLOUD + '/video/upload'
+    resp = _req.post(url, data={
+        'api_key':   api_key,
+        'timestamp': ts,
+        'public_id': public_id,
+        'signature': signature,
+    }, files={'file': (filename, audio_bytes, 'audio/wav')}, timeout=60)
+    resp.raise_for_status()
+    return resp.json()['secure_url']
 
 
 # ─────────────────────── SHEETS HELPERS ─────────────────────────
@@ -109,11 +124,11 @@ def _write_port_columns(sheets, row_idx, port, raw_k, corrected, english, rtt):
 def log_to_sheet(audio_bytes, filename, port, raw_k, corrected, english, rtt):
     """Upload to Drive + write Sheet row. Returns (ok, message) — never raises."""
     try:
-        drive_url = upload_to_drive(audio_bytes, filename)
+        audio_url = upload_to_cloudinary(audio_bytes, filename)
         _, sheets = _google_clients()
-        row_idx   = _find_or_create_row(sheets, filename, drive_url)
+        row_idx   = _find_or_create_row(sheets, filename, audio_url)
         _write_port_columns(sheets, row_idx, port, raw_k, corrected, english, rtt)
-        return True, f"port {port} → row {row_idx} | {drive_url}"
+        return True, f"port {port} → row {row_idx} | {audio_url}"
     except Exception as exc:
         import traceback
         return False, f"port {port} | {type(exc).__name__}: {exc} | {traceback.format_exc()}"

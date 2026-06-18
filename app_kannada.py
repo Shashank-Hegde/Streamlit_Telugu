@@ -54,7 +54,7 @@ def upload_to_cloudinary(audio_bytes: bytes, filename: str) -> str:
     public_id  = filename.replace('.wav', '')
     sig_str    = 'public_id=' + public_id + '&timestamp=' + ts + api_secret
     signature  = hashlib.sha256(sig_str.encode()).hexdigest()
-    url        = 'https://api.cloudinary.com/v1_1/' + CLOUDINARY_CLOUD + '/video/upload'
+    url        = 'https://api.cloudinary.com/v1_1/' + CLOUDINARY_CLOUD + '/raw/upload'
     resp = _req.post(url, data={
         'api_key':   api_key,
         'timestamp': ts,

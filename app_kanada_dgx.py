@@ -1,8 +1,11 @@
 import io
 import os
+import json
 import time
+import asyncio
 import hashlib
 import requests
+import numpy as np
 import streamlit as st
 from datetime import datetime, timezone, timedelta
 from google.oauth2 import service_account
@@ -11,6 +14,7 @@ from googleapiclient.discovery import build
 # ─────────────────────── CONFIG ─────────────────────────────────
 NGROK_URL      = "https://detective-ethically-thus.ngrok-free.dev"
 TIMEOUT_SEC    = 240
+CHUNK_STEP     = int(0.16 * 16000)   # 160 ms @ 16 kHz = 2560 samples = 5120 bytes PCM16
 
 SHEET_ID       = "1HmP5c0xR3CuvkDakip4J5pdzB6hssy-XRuoOu6iBxNI"
 SHEET_TAB      = "Sheet1"
@@ -20,6 +24,7 @@ CLOUDINARY_CLOUD  = "dfufhdc8j"
 CLOUDINARY_PRESET = "kannada_asr"
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
 
 # ─────────────────────── GOOGLE SHEETS CLIENT ───────────────────
 @st.cache_resource
@@ -71,20 +76,15 @@ def _all_filenames(sheets) -> list:
 
 
 def _next_empty_row(sheets) -> int:
-    names = _all_filenames(sheets)
-    return DATA_START_ROW + len(names)
+    return DATA_START_ROW + len(_all_filenames(sheets))
 
 
 def log_to_sheet(audio_bytes, filename, transcription, translation, rtt):
-    """Upload audio to Cloudinary, then write one row to the sheet."""
     try:
         audio_url = upload_to_cloudinary(audio_bytes, filename)
         sheets    = _sheets_client()
         row_idx   = _next_empty_row(sheets)
-
-        cell_a = f'=HYPERLINK("{audio_url}","{filename}")'
-
-        # Columns: A=filename, B=transcription, C=transcription(copy), D=translation, E=RTT
+        cell_a    = f'=HYPERLINK("{audio_url}","{filename}")'
         sheets.spreadsheets().values().update(
             spreadsheetId=SHEET_ID,
             range=f"{SHEET_TAB}!A{row_idx}:E{row_idx}",
@@ -92,7 +92,7 @@ def log_to_sheet(audio_bytes, filename, transcription, translation, rtt):
             body={"values": [[
                 cell_a,
                 transcription,
-                transcription,   # col 3 = literal copy of col 2
+                transcription,
                 translation,
                 round(rtt, 3),
             ]]},
@@ -125,10 +125,8 @@ def to_wav(data: bytes) -> bytes:
             return data
     except Exception:
         pass
-
     try:
         import soundfile as sf
-        import numpy as np
         audio_np, sr = sf.read(io.BytesIO(data), dtype="int16", always_2d=False)
         if sr != 16000:
             target_len = int(len(audio_np) / sr * 16000)
@@ -145,13 +143,11 @@ def to_wav(data: bytes) -> bytes:
         return buf.read()
     except Exception as e1:
         pass
-
     try:
         import av
-        import numpy as np
         container = av.open(io.BytesIO(data))
-        stream = container.streams.audio[0]
-        frames = []
+        stream    = container.streams.audio[0]
+        frames    = []
         for frame in container.decode(stream):
             arr = frame.to_ndarray()
             if arr.ndim == 2:
@@ -163,10 +159,8 @@ def to_wav(data: bytes) -> bytes:
         buf = io.BytesIO()
         import wave as _w
         with _w.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(16000)
-            wf.writeframes(audio_np.tobytes())
+            wf.setnchannels(1); wf.setsampwidth(2)
+            wf.setframerate(16000); wf.writeframes(audio_np.tobytes())
         buf.seek(0)
         return buf.read()
     except Exception as e2:
@@ -174,7 +168,18 @@ def to_wav(data: bytes) -> bytes:
         st.stop()
 
 
-def call_backend(filename, audio_bytes):
+def wav_to_pcm16_blocks(wav_bytes: bytes) -> list[bytes]:
+    """Strip WAV header, return list of raw PCM16 chunks (160 ms each)."""
+    import wave as _wave
+    with _wave.open(io.BytesIO(wav_bytes)) as wf:
+        raw = wf.readframes(wf.getnframes())
+    # CHUNK_STEP samples × 2 bytes/sample
+    block_bytes = CHUNK_STEP * 2
+    return [raw[i:i + block_bytes] for i in range(0, len(raw), block_bytes)]
+
+
+# ─────────────────────── BATCH BACKEND ──────────────────────────
+def call_batch(filename, audio_bytes):
     try:
         t0   = time.perf_counter()
         resp = requests.post(
@@ -201,16 +206,152 @@ def call_backend(filename, audio_bytes):
         return None, None, str(exc)
 
 
-# ─────────────────────── PAGE ────────────────────────────────────
+# ─────────────────────── STREAMING BACKEND ──────────────────────
+def _pcm_to_float32(pcm_bytes: bytes) -> np.ndarray:
+    return np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32) / 32768.0
+
+
+def _to_pcm16(audio_float: np.ndarray) -> bytes:
+    return (np.clip(audio_float, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+
+
+async def _stream_ws(ws_url: str, blocks: list[bytes],
+                     partial_placeholder, segments_placeholder,
+                     status_placeholder) -> dict:
+    """
+    Connect to /ws/transcribe, send all blocks as fast as possible,
+    update Streamlit placeholders live as events arrive.
+    Returns {"transcription": str, "metrics": dict, "_raw_events": list}
+    """
+    import websockets
+
+    all_events   = []
+    segments     = []          # confirmed segment texts
+    final_text   = ""
+    metrics      = {}
+
+    async with websockets.connect(ws_url, max_size=None) as ws:
+        # ── handshake ────────────────────────────────────────────
+        ready = json.loads(await ws.recv())
+        status_placeholder.caption(
+            f"🔗 Connected · {ready.get('sample_rate')} Hz · "
+            f"{ready.get('chunk_ms')} ms chunks"
+        )
+        await ws.send(json.dumps({"type": "config", "format": "int16"}))
+
+        done = asyncio.Event()
+
+        # ── receiver coroutine ───────────────────────────────────
+        async def receive():
+            nonlocal final_text, metrics
+            async for raw in ws:
+                event = json.loads(raw)
+                all_events.append(event)
+                kind = event.get("type")
+
+                if kind == "partial":
+                    partial_placeholder.markdown(
+                        f"*…{event.get('partial', '')}*"
+                    )
+
+                elif kind == "segment":
+                    segments.append(event.get("text", ""))
+                    partial_placeholder.empty()
+                    segments_placeholder.code(
+                        "\n".join(segments), language=None
+                    )
+
+                elif kind == "final" and not event.get("end_of_stream"):
+                    # turn final (silence-triggered mid-session)
+                    segments.append(event.get("text", ""))
+                    partial_placeholder.empty()
+                    segments_placeholder.code(
+                        "\n".join(segments), language=None
+                    )
+
+                elif kind == "final" and event.get("end_of_stream"):
+                    final_text = event.get("transcript", "\n".join(segments))
+                    metrics    = event.get("metrics", {})
+                    done.set()
+                    return
+
+                elif kind == "error":
+                    status_placeholder.error(f"Server error: {event.get('detail')}")
+                    done.set()
+                    return
+
+        receiver = asyncio.create_task(receive())
+
+        # ── sender: push all blocks as fast as possible ──────────
+        t0 = time.perf_counter()
+        for block_pcm16 in blocks:
+            # server expects float32 converted back to PCM16 bytes
+            await ws.send(block_pcm16)
+
+        await ws.send(json.dumps({"type": "end"}))
+        send_time = round(time.perf_counter() - t0, 3)
+        status_placeholder.caption(
+            f"📤 Sent {len(blocks)} blocks in {send_time}s · waiting for final…"
+        )
+
+        await asyncio.wait_for(done.wait(), timeout=TIMEOUT_SEC)
+        receiver.cancel()
+
+    return {
+        "transcription": final_text or "\n".join(segments),
+        "translation":   "",
+        "timing": {
+            "asr_seconds":         metrics.get("rtf"),
+            "translation_seconds": None,
+        },
+        "metrics":    metrics,
+        "_raw":       {"events": all_events, "metrics": metrics},
+    }
+
+
+def call_stream(audio_bytes, partial_ph, segments_ph, status_ph):
+    ws_url = NGROK_URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws/transcribe"
+    blocks = wav_to_pcm16_blocks(audio_bytes)
+    t0     = time.perf_counter()
+    try:
+        result = asyncio.run(
+            _stream_ws(ws_url, blocks, partial_ph, segments_ph, status_ph)
+        )
+        rtt = round(time.perf_counter() - t0, 3)
+        return result, rtt, None
+    except asyncio.TimeoutError:
+        return None, None, f"Timed out after {TIMEOUT_SEC}s"
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+# ════════════════════════════════════════════════════════════════
+# PAGE
+# ════════════════════════════════════════════════════════════════
 st.set_page_config(page_title="Kannada ASR", layout="centered")
 st.title("🎙️ Kannada ASR")
-st.caption(f"Endpoint: `{NGROK_URL}/transcribe`")
 st.markdown("---")
 
-# ── Session state init ───────────────────────────────────────────
-for k in ("result", "rtt", "err", "filename", "audio_bytes"):
+# ── Session state ────────────────────────────────────────────────
+for k in ("result", "rtt", "err", "filename", "audio_bytes", "mode"):
     if k not in st.session_state:
         st.session_state[k] = None
+
+# ── Mode selector ────────────────────────────────────────────────
+mode = st.selectbox(
+    "ASR mode",
+    ["🚀  Batch (single POST)", "📡  Streaming (WebSocket, live partials)"],
+    index=0,
+)
+is_streaming = "Streaming" in mode
+
+if is_streaming:
+    ws_url_display = NGROK_URL.replace("https://", "wss://") + "/ws/transcribe"
+    st.caption(f"WebSocket: `{ws_url_display}`")
+else:
+    st.caption(f"REST: `{NGROK_URL}/transcribe`")
+
+st.markdown("---")
 
 # ── 1. Audio input ───────────────────────────────────────────────
 st.subheader("1 · Provide Kannada audio")
@@ -222,7 +363,6 @@ input_method = st.radio(
 )
 
 raw_bytes = None
-
 if "Record" in input_method:
     af = st.audio_input("Record Kannada audio")
     if af:
@@ -238,14 +378,13 @@ if raw_bytes is None:
 
 audio_bytes = to_wav(raw_bytes)
 
-# Audio info
 import wave as _wv
 try:
     with _wv.open(io.BytesIO(audio_bytes)) as wf:
         sr  = wf.getframerate()
         ch  = wf.getnchannels()
         dur = round(wf.getnframes() / sr, 2)
-    st.caption(f"WAV ready: {sr}Hz · {ch}ch · {dur}s · {len(audio_bytes)//1024}KB")
+    st.caption(f"WAV ready: {sr} Hz · {ch}ch · {dur}s · {len(audio_bytes)//1024} KB")
 except Exception as e:
     st.warning(f"WAV check failed: {e}")
 
@@ -258,11 +397,30 @@ st.subheader("2 · Transcribe")
 
 if st.button("▶  Run", type="primary"):
     filename = make_filename()
-    st.session_state["filename"]    = filename
-    st.session_state["audio_bytes"] = audio_bytes
+    st.session_state.update({
+        "filename":    filename,
+        "audio_bytes": audio_bytes,
+        "result":      None,
+        "rtt":         None,
+        "err":         None,
+        "mode":        "stream" if is_streaming else "batch",
+    })
 
-    with st.spinner("Calling ASR service…"):
-        result, rtt, err = call_backend(filename, audio_bytes)
+    if is_streaming:
+        st.markdown("**Live output**")
+        status_ph   = st.empty()
+        partial_ph  = st.empty()
+        segments_ph = st.empty()
+
+        result, rtt, err = call_stream(
+            audio_bytes, partial_ph, segments_ph, status_ph
+        )
+        partial_ph.empty()
+        if result:
+            status_ph.success(f"✅ Done · RTT {rtt}s")
+    else:
+        with st.spinner("Calling ASR service…"):
+            result, rtt, err = call_batch(filename, audio_bytes)
 
     st.session_state["result"] = result
     st.session_state["rtt"]    = rtt
@@ -302,15 +460,16 @@ if err:
     st.stop()
 
 # Metrics
+raw      = result.get("_raw", {})
+metrics  = result.get("metrics", raw.get("metrics", {}))
 c1, c2, c3 = st.columns(3)
-c1.metric("RTT", f"{rtt} s")
-c2.metric("ASR duration", f"{result['timing'].get('asr_seconds', '—')} s")
-c3.metric("RTF", f"{result['_raw'].get('metrics', {}).get('rtf', '—')}")
+c1.metric("RTT",          f"{rtt} s")
+c2.metric("Duration",     f"{raw.get('duration', metrics.get('duration', '—'))} s")
+c3.metric("RTF",          f"{metrics.get('rtf', raw.get('metrics', {}).get('rtf', '—'))}")
 
 st.markdown("---")
-
 st.markdown("**ಕನ್ನಡ ಲಿಪ್ಯಂತರಣ (Kannada Transcription)**")
 st.code(result["transcription"] or "(empty)", language=None)
 
 with st.expander("DEBUG — Raw response"):
-    st.json(result["_raw"])
+    st.json(raw)

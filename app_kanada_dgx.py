@@ -9,8 +9,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 # ─────────────────────── CONFIG ─────────────────────────────────
-NGROK_URL      = "https://detective-ethically-thus.ngrok-free.dev/transcribe"
-LANGUAGE_ID    = "kn"
+NGROK_URL      = "https://detective-ethically-thus.ngrok-free.dev"
 TIMEOUT_SEC    = 240
 
 SHEET_ID       = "1HmP5c0xR3CuvkDakip4J5pdzB6hssy-XRuoOu6iBxNI"
@@ -179,9 +178,8 @@ def call_backend(filename, audio_bytes):
     try:
         t0   = time.perf_counter()
         resp = requests.post(
-            NGROK_URL,
-            files={"audio": (filename, io.BytesIO(audio_bytes), "audio/wav")},
-            data={"language_id": LANGUAGE_ID},
+            f"{NGROK_URL}/transcribe",
+            files={"file": (filename, io.BytesIO(audio_bytes), "audio/wav")},
             timeout=TIMEOUT_SEC,
         )
         rtt = round(time.perf_counter() - t0, 3)
@@ -189,10 +187,13 @@ def call_backend(filename, audio_bytes):
             return None, rtt, f"HTTP {resp.status_code}: {resp.text[:600]}"
         data = resp.json()
         return {
-            "transcription": data.get("transcription", ""),
-            "translation":   data.get("translation", ""),
-            "timing":        data.get("timing", {}),
-            "_raw":          data,
+            "transcription": data.get("text", ""),
+            "translation":   "",
+            "timing": {
+                "asr_seconds":         data.get("duration"),
+                "translation_seconds": None,
+            },
+            "_raw": data,
         }, rtt, None
     except requests.exceptions.Timeout:
         return None, None, f"Timed out after {TIMEOUT_SEC}s"
@@ -203,7 +204,7 @@ def call_backend(filename, audio_bytes):
 # ─────────────────────── PAGE ────────────────────────────────────
 st.set_page_config(page_title="Kannada ASR", layout="centered")
 st.title("🎙️ Kannada ASR")
-st.caption(f"Endpoint: `{NGROK_URL}` · language_id: `{LANGUAGE_ID}`")
+st.caption(f"Endpoint: `{NGROK_URL}/transcribe`")
 st.markdown("---")
 
 # ── Session state init ───────────────────────────────────────────
@@ -303,16 +304,13 @@ if err:
 # Metrics
 c1, c2, c3 = st.columns(3)
 c1.metric("RTT", f"{rtt} s")
-c2.metric("ASR", f"{result['timing'].get('asr_seconds', '—')} s")
-c3.metric("Translation", f"{result['timing'].get('translation_seconds', '—')} s")
+c2.metric("ASR duration", f"{result['timing'].get('asr_seconds', '—')} s")
+c3.metric("RTF", f"{result['_raw'].get('metrics', {}).get('rtf', '—')}")
 
 st.markdown("---")
 
 st.markdown("**ಕನ್ನಡ ಲಿಪ್ಯಂತರಣ (Kannada Transcription)**")
 st.code(result["transcription"] or "(empty)", language=None)
-
-st.markdown("**English Translation**")
-st.code(result["translation"] or "(empty)", language=None)
 
 with st.expander("DEBUG — Raw response"):
     st.json(result["_raw"])

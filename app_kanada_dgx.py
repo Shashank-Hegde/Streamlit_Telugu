@@ -8,7 +8,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 # ─────────────────────── CONFIG ─────────────────────────────────
-DGX_URL        = "https://detective-ethically-thus.ngrok-free.dev/transcribe"   # ← paste your ngrok URL here
+DGX_URL        = "https://YOUR-NGROK-URL.ngrok-free.app"   # ← paste your ngrok URL here
 TIMEOUT_SEC    = 240
 
 SHEET_ID       = "1HmP5c0xR3CuvkDakip4J5pdzB6hssy-XRuoOu6iBxNI"
